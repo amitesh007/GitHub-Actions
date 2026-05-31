@@ -48,5 +48,5 @@ jobs:
       - name: Multple Dependencies
         run: sleep 10
       - name: Checking Runner Info
-        run: sw-vers
+        run: sw_vers
       
