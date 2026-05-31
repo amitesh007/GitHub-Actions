@@ -24,3 +24,24 @@ jobs:
           echo "Hi from Amitesh Srivastava"
           echo "Current time is `date`"
           sleep 20
+
+  job3:
+    name: JOB3
+    needs:
+      - job1
+    runs-on: ubuntu-latest
+    steps:
+      - name: Single Dependency
+        run: sleep 10
+
+  job4:
+    name: JOB4
+    needs:
+      - job1
+      - job2
+      - job3
+    runs-on: ubuntu-latest
+    steps:
+      - name: Multple Dependencies
+        run: sleep 10
+      
