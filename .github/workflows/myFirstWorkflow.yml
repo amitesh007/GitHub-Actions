@@ -13,14 +13,14 @@ jobs:
       - name: Calling Sleep
         run: sleep 20
       
-job2:
-  name: JOB2
-  runs-on: ubuntu-latest
-  steps:
-    - name: Check the hostname for Runner
-      run: hostname
-    - name: Running multiple commands
-      run: |
-        echo "Hi from Amitesh Srivastava"
-        echo "Current time is `date`"
-        sleep 20
+  job2:
+    name: JOB2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the hostname for Runner
+        run: hostname
+      - name: Running multiple commands
+        run: |
+          echo "Hi from Amitesh Srivastava"
+          echo "Current time is `date`"
+          sleep 20
