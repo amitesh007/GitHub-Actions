@@ -29,10 +29,13 @@ jobs:
     name: JOB3
     needs:
       - job1
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - name: Single Dependency
         run: sleep 10
+      - name: Checking Runner Info
+        shell: pwsh
+        run: get-computerinfo
 
   job4:
     name: JOB4
@@ -40,8 +43,10 @@ jobs:
       - job1
       - job2
       - job3
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - name: Multple Dependencies
         run: sleep 10
+      - name: Checking Runner Info
+        run: sw-vers
       
