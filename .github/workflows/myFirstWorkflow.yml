@@ -22,4 +22,11 @@ jobs:
           pwd
           ls -ltr
           hostname
+
+  job2:
+    name: Echo message
+    runs-on: ubuntu-latest
+    steps:
+      - name: Step 1
+        run: echo 'my name is amitesh'
       
