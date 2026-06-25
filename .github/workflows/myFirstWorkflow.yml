@@ -32,5 +32,7 @@ jobs:
     steps:
       - name: Step 1
         run: echo 'my name is amitesh'
+      - name: Step 2
+        run: exit 1
     
       
