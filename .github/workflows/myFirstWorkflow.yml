@@ -7,6 +7,10 @@ on:
     branches:
       - dev
       - 'feature-*'
+  pull_request:
+    branches:
+      - dev
+      - 'feature-*'
 
 jobs:
   job1:
@@ -32,5 +36,7 @@ jobs:
     steps:
       - name: Step 1
         run: echo 'my name is amitesh'
+      - name: Step 2
+        run: exit 1
     
       
