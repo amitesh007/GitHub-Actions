@@ -1,16 +1,12 @@
 name: my-first-workflow
 on: 
-  schedule:
-    - cron: "*/5 * * * *"
-  workflow_dispatch:
   push:
     branches:
       - dev
       - 'feature-*'
   pull_request:
     branches:
-      - dev
-      - 'feature-*'
+      - main
 
 jobs:
   job1:
