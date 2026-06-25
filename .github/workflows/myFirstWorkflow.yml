@@ -4,9 +4,12 @@ on:
     branches:
       - dev
       - 'feature-*'
+      - main
   pull_request:
     branches:
       - main
+      - dev
+      - 'feature-*'
 
 jobs:
   job1:
