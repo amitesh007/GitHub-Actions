@@ -1,4 +1,4 @@
-name: my-first-workflow
+name: my-first-workflow-1
 on: 
   schedule:
     - cron: "*/5 * * * *"
