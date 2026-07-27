@@ -34,6 +34,7 @@ env:
 permissions:
   contents: write
   pull-requests: write
+  id-token: write
 
 jobs:
   run-lending-api-agent:
@@ -143,6 +144,7 @@ jobs:
         uses: anthropics/claude-code-action@beta
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           model: claude-sonnet-4-6
           prompt: |
             ## Lending API Developer Agent — Steps 2 through 10
