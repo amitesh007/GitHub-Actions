@@ -140,11 +140,10 @@ jobs:
       # 5. Steps 2–10 — Invoke lending-api-developer agent
       # ─────────────────────────────────────────────────────────────────────────
       - name: "Invoke lending-api-developer agent (Steps 2–10)"
-        uses: anthropic/claude-code-action@beta
+        uses: anthropics/claude-code-action@beta
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           model: claude-sonnet-4-6
-          agent_file: .github/agents/lending-api-developer.agent.md
           prompt: |
             ## Lending API Developer Agent — Steps 2 through 10
 
