@@ -1,0 +1,262 @@
+# Agent Call — Lending API Developer
+#
+# Manual workflow that:
+#   1. Accepts a branch name and spreadsheet path from the user
+#   2. Checks out the specified branch
+#   3. Invokes the lending-api-developer agent (.github/agents/lending-api-developer.agent.md)
+#   4. Loads and uploads the generated Review.md from FLIQ-liqjava/Review.md
+#
+# Prerequisites:
+#   - ANTHROPIC_API_KEY must be set as a repository secret
+#   - The requirement spreadsheet must already be committed to the target branch
+
+name: Agent Call — Lending API Developer
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch_name:
+        description: "Branch to run the agent on (e.g. feature/my-api-branch)"
+        required: true
+        type: string
+      spreadsheet_path:
+        description: "Repo-relative path to the requirement spreadsheet (e.g. LoanIQ/MyEntity_API_v1.xlsx)"
+        required: true
+        type: string
+
+concurrency:
+  group: agent-call-${{ github.event.inputs.branch_name }}
+  cancel-in-progress: false
+
+env:
+  JAVA_VERSION: '21'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  run-lending-api-agent:
+    name: "Run lending-api-developer agent on branch: ${{ inputs.branch_name }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      # ─────────────────────────────────────────────────────────────────────────
+      # 1. Checkout the user-specified branch
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: Checkout repository on specified branch
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ inputs.branch_name }}
+          fetch-depth: 0
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # 2. Set up Java (required by IntegrationAPITool JAR)
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # 3. Validate inputs
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: Validate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BRANCH="${{ inputs.branch_name }}"
+          SHEET_PATH="${{ inputs.spreadsheet_path }}"
+
+          # Guard against path traversal
+          if [[ "${SHEET_PATH}" == *".."* ]]; then
+            echo "::error::Path traversal detected in spreadsheet_path. Got: '${SHEET_PATH}'"
+            exit 1
+          fi
+
+          # Must end in .xlsx or .xls
+          if [[ ! "${SHEET_PATH}" =~ \.(xlsx|xls)$ ]]; then
+            echo "::error::spreadsheet_path must end with .xlsx or .xls. Got: '${SHEET_PATH}'"
+            exit 1
+          fi
+
+          # File must exist in the checked-out branch
+          if [ ! -f "${SHEET_PATH}" ]; then
+            echo "::error::Spreadsheet not found at '${SHEET_PATH}' on branch '${BRANCH}'."
+            echo ""
+            echo "Excel files available in LoanIQ/:"
+            find LoanIQ -maxdepth 2 \( -name "*.xlsx" -o -name "*.xls" \) 2>/dev/null \
+              | sort | sed 's/^/  - /' \
+              || echo "  (none found)"
+            exit 1
+          fi
+
+          # Agent file must exist
+          if [ ! -f ".github/agents/lending-api-developer.agent.md" ]; then
+            echo "::error::Agent file not found: .github/agents/lending-api-developer.agent.md"
+            exit 1
+          fi
+
+          echo "✅ Branch:            ${BRANCH}"
+          echo "✅ Spreadsheet path:  ${SHEET_PATH}"
+          echo "✅ Agent file:        .github/agents/lending-api-developer.agent.md"
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # 4. Step 1 (agent) — Run Excel Reader to generate baseline classes
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: "Agent Step 1 — Run Excel Reader (generate baseline classes)"
+        id: excel-reader
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $excelPath = Join-Path $env:GITHUB_WORKSPACE "${{ inputs.spreadsheet_path }}"
+
+          Write-Host "Running Excel reader with spreadsheet: $excelPath" -ForegroundColor Cyan
+          .github/skills/lending-rest-excel-reader/scripts/run-excel-reader.ps1 $excelPath
+
+          # Verify at least one baseline class was produced
+          $tempDir = Join-Path $env:GITHUB_WORKSPACE "IntegrationAPITool/artifacts/temp_generated_class"
+          $files = Get-ChildItem $tempDir -Filter "*.java" -ErrorAction SilentlyContinue
+          if ($null -eq $files -or $files.Count -eq 0) {
+            Write-Error "No baseline Java classes were generated in: $tempDir"
+            exit 1
+          }
+          Write-Host "`n✅ Generated $($files.Count) baseline class(es):" -ForegroundColor Green
+          $files | ForEach-Object { Write-Host "   - $($_.Name)" }
+
+          # Expose entity name derived from generated files for later steps
+          $firstClass = $files[0].Name
+          if ($firstClass -match 'LiqAPI(?:Create|Update|Query|Delete)(.+?)Integration') {
+            $entity = $Matches[1]
+            Write-Host "`nDetected entity: $entity"
+            "entity_name=$entity" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # 5. Steps 2–10 — Invoke lending-api-developer agent
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: "Invoke lending-api-developer agent (Steps 2–10)"
+        uses: anthropic/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          model: claude-sonnet-4-6
+          agent_file: .github/agents/lending-api-developer.agent.md
+          prompt: |
+            ## Lending API Developer Agent — Steps 2 through 10
+
+            Read the full agent definition at: `.github/agents/lending-api-developer.agent.md`
+
+            ### EXECUTION CONTEXT
+
+            - **Spreadsheet path**: `${{ inputs.spreadsheet_path }}`
+            - **Current branch**: `${{ inputs.branch_name }}`
+            - **Baseline classes already generated in**: `IntegrationAPITool/artifacts/temp_generated_class/`
+
+            ### INSTRUCTIONS
+
+            Step 1 (run-excel-reader.ps1) has already been executed by the workflow.
+            Baseline Java classes are in `IntegrationAPITool/artifacts/temp_generated_class/`.
+
+            1. Start from **Step 2: Determine API Type Scope** and execute through **Step 10**.
+            2. Follow ALL guardrails, Self-Healing checks, and SKILL.md patterns defined in
+               the agent file.
+            3. Mark any N/A steps explicitly — never silently skip a step.
+            4. At Step 10, generate `FLIQ-liqjava/Review.md` (or `Review.md` at repo root if
+               FLIQ-liqjava sub-folder does not exist).
+            5. Do NOT commit files — the workflow handles git operations.
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # 6. Load and display Review.md
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: Load Review.md
+        id: load-review
+        shell: bash
+        run: |
+          # Primary path expected by the agent
+          REVIEW_PATH="FLIQ-liqjava/Review.md"
+
+          # Fall back to repo-root Review.md if the sub-folder path doesn't exist
+          if [ ! -f "${REVIEW_PATH}" ]; then
+            REVIEW_PATH="Review.md"
+          fi
+
+          if [ -f "${REVIEW_PATH}" ]; then
+            echo "review_found=true"  >> "$GITHUB_OUTPUT"
+            echo "review_path=${REVIEW_PATH}" >> "$GITHUB_OUTPUT"
+            echo ""
+            echo "════════════════════════════════════════════════════════════════"
+            echo "  Review.md — ${REVIEW_PATH}"
+            echo "════════════════════════════════════════════════════════════════"
+            cat "${REVIEW_PATH}"
+            echo "════════════════════════════════════════════════════════════════"
+          else
+            echo "review_found=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Review.md was not found at 'FLIQ-liqjava/Review.md' or 'Review.md'."
+          fi
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # 7. Commit and push generated files
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: Configure git identity
+        shell: bash
+        run: |
+          git config user.name  "agent-call[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Stage all generated and modified files
+        id: stage
+        shell: bash
+        run: |
+          git add -A
+          if git diff --cached --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No file changes were staged after agent execution. Nothing to commit."
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "Staged files:"
+            git diff --cached --name-only | sed 's/^/  /'
+          fi
+
+      - name: Commit generated API classes
+        if: steps.stage.outputs.has_changes == 'true'
+        shell: bash
+        run: |
+          ENTITY="${{ steps.excel-reader.outputs.entity_name }}"
+          [ -z "${ENTITY}" ] && ENTITY="(unknown entity)"
+
+          git commit -m "feat: Add ${ENTITY} REST API integration classes (agent-call)
+
+          Generated by lending-api-developer agent via agent-call workflow.
+
+          - Entity:      ${ENTITY}
+          - Spreadsheet: ${{ inputs.spreadsheet_path }}
+          - Branch:      ${{ inputs.branch_name }}
+          - Run:         ${{ github.run_id }}
+          - Actor:       ${{ github.actor }}"
+
+      - name: Push to target branch
+        if: steps.stage.outputs.has_changes == 'true'
+        shell: bash
+        run: |
+          git push origin HEAD:"${{ inputs.branch_name }}"
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # 8. Upload artifacts (always, even on failure)
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: Upload generated output as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-call-output-run${{ github.run_number }}
+          path: |
+            IntegrationAPITool/artifacts/temp_generated_class/
+            FLIQ-liqjava/Review.md
+            Review.md
+            FLIQ-liqjava/usage-agent.md
+            usage-agent.md
+          retention-days: 14
+          if-no-files-found: ignore
