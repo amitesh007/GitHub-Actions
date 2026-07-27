@@ -146,6 +146,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           model: claude-sonnet-4-6
+          mode: agent
           prompt: |
             ## Lending API Developer Agent — Steps 2 through 10
 
