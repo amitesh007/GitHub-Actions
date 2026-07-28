@@ -181,7 +181,7 @@ jobs:
 
           HTTP_CODE=$(curl -s -o copilot-output.json -w "%{http_code}" \
             -X POST \
-            -H "Authorization: token ${GH_TOKEN}" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Content-Type: application/json" \
             -H "Accept: application/vnd.github+json" \
             "https://models.inference.ai.azure.com/chat/completions" \
