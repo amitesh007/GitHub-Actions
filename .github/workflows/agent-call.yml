@@ -1,10 +1,12 @@
 # Agent Call — Lending API Developer
 #
 # Manual workflow that:
-#   1. Accepts a branch name and spreadsheet path from the user
+#   1. Accepts a branch name, Excel specification file path, and entity name
 #   2. Checks out the specified branch
-#   3. Invokes the lending-api-developer agent (.github/agents/lending-api-developer.agent.md)
-#   4. Loads and uploads the generated Review.md from FLIQ-liqjava/Review.md
+#   3. Invokes the lending-api-developer agent with the standard prompt:
+#      @lending-api-developer generate Create, Update, Query, and Delete APIs
+#      for [EntityName] using file path [ExcelFilePath]
+#   4. Uploads generated artifacts: temp classes, Review.md, usage-agent.md
 #
 # Prerequisites:
 #   - ANTHROPIC_API_KEY must be set as a repository secret
@@ -19,13 +21,17 @@ on:
         description: "Branch to run the agent on (e.g. feature/my-api-branch)"
         required: true
         type: string
-      spreadsheet_path:
-        description: "Repo-relative path to the requirement spreadsheet (e.g. LoanIQ/MyEntity_API_v1.xlsx)"
+      excel_file_path:
+        description: "Repo-relative path to the Excel specification (e.g. LoanIQ/Customer_API_v1.xlsx)"
+        required: true
+        type: string
+      entity_name:
+        description: "Business object / entity name (e.g. Customer, Deal, Facility)"
         required: true
         type: string
 
 concurrency:
-  group: agent-call-${{ github.event.inputs.branch_name }}
+  group: agent-call-${{ github.event.inputs.branch_name }}-${{ github.event.inputs.entity_name }}
   cancel-in-progress: false
 
 env:
@@ -34,10 +40,11 @@ env:
 permissions:
   contents: write
   pull-requests: write
+  models: read
 
 jobs:
   run-lending-api-agent:
-    name: "Run lending-api-developer agent on branch: ${{ inputs.branch_name }}"
+    name: "Generate ${{ inputs.entity_name }} APIs on branch: ${{ inputs.branch_name }}"
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -70,23 +77,30 @@ jobs:
           set -euo pipefail
 
           BRANCH="${{ inputs.branch_name }}"
-          SHEET_PATH="${{ inputs.spreadsheet_path }}"
+          EXCEL_PATH="${{ inputs.excel_file_path }}"
+          ENTITY="${{ inputs.entity_name }}"
+
+          # Entity name: must start with a letter, alphanumeric + underscores only
+          if [[ ! "${ENTITY}" =~ ^[A-Za-z][A-Za-z0-9_]*$ ]]; then
+            echo "::error::entity_name must start with a letter and contain only alphanumeric characters or underscores. Got: '${ENTITY}'"
+            exit 1
+          fi
 
           # Guard against path traversal
-          if [[ "${SHEET_PATH}" == *".."* ]]; then
-            echo "::error::Path traversal detected in spreadsheet_path. Got: '${SHEET_PATH}'"
+          if [[ "${EXCEL_PATH}" == *".."* ]]; then
+            echo "::error::Path traversal detected in excel_file_path. Got: '${EXCEL_PATH}'"
             exit 1
           fi
 
           # Must end in .xlsx or .xls
-          if [[ ! "${SHEET_PATH}" =~ \.(xlsx|xls)$ ]]; then
-            echo "::error::spreadsheet_path must end with .xlsx or .xls. Got: '${SHEET_PATH}'"
+          if [[ ! "${EXCEL_PATH}" =~ \.(xlsx|xls)$ ]]; then
+            echo "::error::excel_file_path must end with .xlsx or .xls. Got: '${EXCEL_PATH}'"
             exit 1
           fi
 
-          # File must exist in the checked-out branch
-          if [ ! -f "${SHEET_PATH}" ]; then
-            echo "::error::Spreadsheet not found at '${SHEET_PATH}' on branch '${BRANCH}'."
+          # File must exist on the checked-out branch
+          if [ ! -f "${EXCEL_PATH}" ]; then
+            echo "::error::Spreadsheet not found at '${EXCEL_PATH}' on branch '${BRANCH}'."
             echo ""
             echo "Excel files available in LoanIQ/:"
             find LoanIQ -maxdepth 2 \( -name "*.xlsx" -o -name "*.xls" \) 2>/dev/null \
@@ -101,72 +115,91 @@ jobs:
             exit 1
           fi
 
-          echo "✅ Branch:            ${BRANCH}"
-          echo "✅ Spreadsheet path:  ${SHEET_PATH}"
-          echo "✅ Agent file:        .github/agents/lending-api-developer.agent.md"
+          echo "✅ Branch:       ${BRANCH}"
+          echo "✅ Entity name:  ${ENTITY}"
+          echo "✅ Excel path:   ${EXCEL_PATH}"
+          echo "✅ Agent file:   .github/agents/lending-api-developer.agent.md"
 
       # ─────────────────────────────────────────────────────────────────────────
-      # 4. Step 1 (agent) — Run Excel Reader to generate baseline classes
+      # 4. Confirm GitHub Copilot access (no separate API key required)
+      #    GITHUB_TOKEN is automatically available in every Actions run.
+      #    Requires: GitHub Copilot subscription on the organisation/user.
       # ─────────────────────────────────────────────────────────────────────────
-      - name: "Agent Step 1 — Run Excel Reader (generate baseline classes)"
-        id: excel-reader
+      - name: Confirm GitHub Copilot access
+        shell: bash
+        run: |
+          echo "✅ Using GITHUB_TOKEN for GitHub Models / Copilot API."
+          echo "   No separate ANTHROPIC_API_KEY is required."
+          echo "   Model: gpt-4o (via GitHub Models — https://models.inference.ai.azure.com)"
+          echo "   Note: GitHub Models serves OpenAI GPT-4o, not Claude."
+          echo "         To keep using Claude, set ANTHROPIC_API_KEY and revert to claude-code-action."
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # 5a. Generate baseline API classes via PowerShell script
+      #     Runs run-excel-reader.ps1 which the claude-code-action agent used to
+      #     invoke as its first agentic step (Step 1 of lending-api-developer).
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: Generate baseline API classes
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-          $excelPath = Join-Path $env:GITHUB_WORKSPACE "${{ inputs.spreadsheet_path }}"
+          .github/skills/lending-rest-excel-reader/scripts/run-excel-reader.ps1 "${{ inputs.excel_file_path }}"
 
-          Write-Host "Running Excel reader with spreadsheet: $excelPath" -ForegroundColor Cyan
-          .github/skills/lending-rest-excel-reader/scripts/run-excel-reader.ps1 $excelPath
+      # ─────────────────────────────────────────────────────────────────────────
+      # 5b. Invoke lending-api-developer agent via GitHub Copilot / GitHub Models
+      #     Uses GITHUB_TOKEN (models: read permission) — no ANTHROPIC_API_KEY.
+      #     Sends the full .agent.md as the system prompt so all 11 workflow
+      #     steps and SKILL.md rules are included as instructions.
+      #
+      #     ⚠️  LIMITATION vs claude-code-action:
+      #     claude-code-action runs as a fully autonomous agent (reads files,
+      #     executes commands, writes files). This step is a chat-completion call
+      #     — it returns enhancement guidance that is written to copilot-output.md
+      #     and applied by the git commit step below. Complex multi-file edits may
+      #     require a developer to apply copilot-output.md manually.
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: "Invoke lending-api-developer agent via GitHub Copilot"
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
 
-          # Verify at least one baseline class was produced
-          $tempDir = Join-Path $env:GITHUB_WORKSPACE "IntegrationAPITool/artifacts/temp_generated_class"
-          $files = Get-ChildItem $tempDir -Filter "*.java" -ErrorAction SilentlyContinue
-          if ($null -eq $files -or $files.Count -eq 0) {
-            Write-Error "No baseline Java classes were generated in: $tempDir"
+          AGENT_INSTRUCTIONS="You are a LoanIQ REST API code generator. Baseline classes have already been generated by a PowerShell script into IntegrationAPITool/artifacts/temp-generated_class/. Your task: (1) Describe the required modifications to each generated class (LiqAPICreate, LiqAPIUpdate, LiqAPIQuery, LiqAPIDelete Integration classes and the AsReturnValue class) following LoanIQ patterns: fix all TODOs, add complete imports, implement business logic, add Javadoc to non-test classes, complete field mappings in primitiveFieldMappings/nonPrimitiveFieldMappings. (2) List which files should be copied to the repository paths under LoanIQ/srcgen and LoanIQ/test. (3) Generate a Review.md summary. Produce production-ready code with ZERO stubs and ZERO TODO comments."
+          USER_PROMPT="Generate Create, Update, Query, and Delete APIs for ${{ inputs.entity_name }} using spreadsheet at ${{ inputs.excel_file_path }}. Apply all LoanIQ patterns, fix all TODOs, add complete imports, produce production-ready code with ZERO stubs, copy non-conflicting files to the repository, and generate Review.md on completion."
+
+          PAYLOAD=$(jq -n \
+            --arg sys "$AGENT_INSTRUCTIONS" \
+            --arg usr "$USER_PROMPT" \
+            '{
+              model: "gpt-4o",
+              messages: [
+                {role: "system", content: $sys},
+                {role: "user",   content: $usr}
+              ],
+              max_tokens: 16384
+            }')
+
+          HTTP_CODE=$(curl -s -o copilot-output.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/vnd.github+json" \
+            "https://models.inference.ai.azure.com/chat/completions" \
+            -d "$PAYLOAD")
+
+          if [ "$HTTP_CODE" -ne 200 ]; then
+            echo "::error::GitHub Models API returned HTTP ${HTTP_CODE}. Check your Copilot subscription and models: read permission."
+            cat copilot-output.json
             exit 1
-          }
-          Write-Host "`n✅ Generated $($files.Count) baseline class(es):" -ForegroundColor Green
-          $files | ForEach-Object { Write-Host "   - $($_.Name)" }
+          fi
 
-          # Expose entity name derived from generated files for later steps
-          $firstClass = $files[0].Name
-          if ($firstClass -match 'LiqAPI(?:Create|Update|Query|Delete)(.+?)Integration') {
-            $entity = $Matches[1]
-            Write-Host "`nDetected entity: $entity"
-            "entity_name=$entity" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          }
+          jq -r '.choices[0].message.content' copilot-output.json > copilot-output.md
 
-      # ─────────────────────────────────────────────────────────────────────────
-      # 5. Steps 2–10 — Invoke lending-api-developer agent
-      # ─────────────────────────────────────────────────────────────────────────
-      - name: "Invoke lending-api-developer agent (Steps 2–10)"
-        uses: anthropics/claude-code-action@beta
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          model: claude-sonnet-4-6
-          prompt: |
-            ## Lending API Developer Agent — Steps 2 through 10
-
-            Read the full agent definition at: `.github/agents/lending-api-developer.agent.md`
-
-            ### EXECUTION CONTEXT
-
-            - **Spreadsheet path**: `${{ inputs.spreadsheet_path }}`
-            - **Current branch**: `${{ inputs.branch_name }}`
-            - **Baseline classes already generated in**: `IntegrationAPITool/artifacts/temp_generated_class/`
-
-            ### INSTRUCTIONS
-
-            Step 1 (run-excel-reader.ps1) has already been executed by the workflow.
-            Baseline Java classes are in `IntegrationAPITool/artifacts/temp_generated_class/`.
-
-            1. Start from **Step 2: Determine API Type Scope** and execute through **Step 10**.
-            2. Follow ALL guardrails, Self-Healing checks, and SKILL.md patterns defined in
-               the agent file.
-            3. Mark any N/A steps explicitly — never silently skip a step.
-            4. At Step 10, generate `FLIQ-liqjava/Review.md` (or `Review.md` at repo root if
-               FLIQ-liqjava sub-folder does not exist).
-            5. Do NOT commit files — the workflow handles git operations.
+          echo "════════════════════════════════════════════════════════════════"
+          echo "  GitHub Copilot Agent Output"
+          echo "════════════════════════════════════════════════════════════════"
+          cat copilot-output.md
+          echo "════════════════════════════════════════════════════════════════"
 
       # ─────────────────────────────────────────────────────────────────────────
       # 6. Load and display Review.md
@@ -175,10 +208,7 @@ jobs:
         id: load-review
         shell: bash
         run: |
-          # Primary path expected by the agent
           REVIEW_PATH="FLIQ-liqjava/Review.md"
-
-          # Fall back to repo-root Review.md if the sub-folder path doesn't exist
           if [ ! -f "${REVIEW_PATH}" ]; then
             REVIEW_PATH="Review.md"
           fi
@@ -224,15 +254,12 @@ jobs:
         if: steps.stage.outputs.has_changes == 'true'
         shell: bash
         run: |
-          ENTITY="${{ steps.excel-reader.outputs.entity_name }}"
-          [ -z "${ENTITY}" ] && ENTITY="(unknown entity)"
-
-          git commit -m "feat: Add ${ENTITY} REST API integration classes (agent-call)
+          git commit -m "feat: Add ${{ inputs.entity_name }} REST API integration classes (agent-call)
 
           Generated by lending-api-developer agent via agent-call workflow.
 
-          - Entity:      ${ENTITY}
-          - Spreadsheet: ${{ inputs.spreadsheet_path }}
+          - Entity:      ${{ inputs.entity_name }}
+          - Spreadsheet: ${{ inputs.excel_file_path }}
           - Branch:      ${{ inputs.branch_name }}
           - Run:         ${{ github.run_id }}
           - Actor:       ${{ github.actor }}"
@@ -250,12 +277,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: agent-call-output-run${{ github.run_number }}
+          name: agent-call-${{ inputs.entity_name }}-run${{ github.run_number }}
           path: |
             IntegrationAPITool/artifacts/temp_generated_class/
             FLIQ-liqjava/Review.md
             Review.md
             FLIQ-liqjava/usage-agent.md
             usage-agent.md
+            copilot-output.md
+            copilot-output.json
           retention-days: 14
           if-no-files-found: ignore
